@@ -1,0 +1,20 @@
+# File: .github/workflows/main.yml
+
+name: SpiritDigix CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  welcome-job:
+    runs-on: ubuntu-latest  # Use GitHub-hosted Linux runner
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Show Welcome Message
+        run: echo "✅ Welcome to SpiritDigix GitHub Actions workflow!"
