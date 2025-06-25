@@ -1,0 +1,109 @@
+# File: .github/workflows/data-processing.yml
+
+name: polaris-data-processing
+
+on:
+  push:
+    branches:
+      - dev2
+      - qa
+
+jobs:
+  build_and_deploy_dev2:
+    if: github.ref == 'refs/heads/dev2'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+        with:
+          ref: dev2
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install pylint
+        run: |
+          python -m pip install --upgrade pip
+          pip install pylint azure-storage-blob
+
+      - name: Set TIMESTAMP
+        run: echo "TIMESTAMP=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
+
+      - name: Run pylint and save report
+        run: |
+          if [ -d "DataProccessing" ] || [ -d "dataTableEdit" ] || [ -d "datavalidation_task_execution" ] || [ -d "Data_Catalog" ]; then
+            pylint DataProccessing/ dataTableEdit/ datavalidation_task_execution/ Data_Catalog/ --output-format=text > data-processing-${{ env.TIMESTAMP }}.txt || true
+          else
+            echo "No directories found for linting."
+      
+      - name: Upload Pylint Report to Dev Blob
+        run: |
+          echo "Uploading file: data-processing-${{ env.TIMESTAMP }}.txt"
+          if [ -f "data-processing-${{ env.TIMESTAMP }}.txt" ]; then
+            az storage blob upload --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
+              --container-name pylint-reports \
+              --name dev/data-processing-${{ env.TIMESTAMP }}.txt \
+              --file data-processing-${{ env.TIMESTAMP }}.txt \
+              --auth-mode key
+          else
+            echo "File data-processing-${{ env.TIMESTAMP }}.txt does not exist!"
+        env:
+          AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+          TIMESTAMP: ${{ env.TIMESTAMP }}
+
+      - name: Docker Login to Dev ACR
+        uses: azure/docker-login@v1
+        with:
+          login-server: polarisdev.azurecr.io
+          username: ${{ secrets.REGISTRY_USERNAME_Dev2 }}
+          password: ${{ secrets.REGISTRY_PASSWORD_Dev2 }}
+
+      - name: Build and Push Dev Docker Image
+        run: |
+          docker build -t polarisdev.azurecr.io/sds-dataprocessing:${{ github.sha }} .
+          docker tag polarisdev.azurecr.io/sds-dataprocessing:${{ github.sha }} polarisdev.azurecr.io/sds-dataprocessing:latest
+          echo "Pushing Dev Docker image to ACR..."
+          docker push polarisdev.azurecr.io/sds-dataprocessing:latest
+
+  build_and_deploy_qa:
+    if: github.ref == 'refs/heads/qa'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Merge branch from dev2 to qa
+        uses: everlytic/branch-merge@1.1.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          source_ref: 'dev2'
+          target_branch: 'qa'
+
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+        with:
+          ref: qa
+
+      - name: Docker Login to QA ACR
+        uses: azure/docker-login@v1
+        with:
+          login-server: sdsqapolaris.azurecr.io
+          username: ${{ secrets.REGISTRY_USERNAME_QA }}
+          password: ${{ secrets.REGISTRY_PASSWORD_QA }}
+
+      - name: Build and Push QA Docker Image
+        run: |
+          docker build -t sdsqapolaris.azurecr.io/sds-dataprocessing:${{ github.sha }} .
+          docker tag sdsqapolaris.azurecr.io/sds-dataprocessing:${{ github.sha }} sdsqapolaris.azurecr.io/sds-dataprocessing:latest
+          echo "Pushing QA Docker image to ACR..."
+          docker push sdsqapolaris.azurecr.io/sds-dataprocessing:latest
